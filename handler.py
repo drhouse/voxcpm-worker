@@ -1,0 +1,70 @@
+"""Runpod Serverless worker: VoxCPM2 cross-lingual voice cloning, batch in, WAVs out.
+
+Game-agnostic. The caller renders the spoken text (pronunciation tables,
+stutter respelling) and picks the reference clip; the worker only synthesises.
+Settings default to what the WitchSpring R v1 pack was generated with, so a
+regenerated line matches the rest of that pack:
+
+  ultimate cloning (prompt wav + its exact transcript, same clip as reference),
+  cfg 2.0, 30 diffusion steps, retry_badcase up to 5 times with a per-line
+  frame-ratio threshold of 2.0 + 20 / len(text).
+
+Input:  {"input": {"items": [{"id", "text", "ref_b64", "ref_text"}, ...],
+                   "cfg": 2.0, "steps": 30}}
+Output: {"results": [{"id", "wav_b64", "seconds"} | {"id", "error"}], "device": ...}
+"""
+import base64
+import io
+import os
+import tempfile
+import time
+
+import runpod
+import soundfile as sf
+import torch
+from voxcpm import VoxCPM
+
+DEVICE = "cuda" if torch.cuda.is_available() else "CPU-FALLBACK"
+MODEL = VoxCPM.from_pretrained(os.environ.get("VOXCPM_MODEL", "openbmb/VoxCPM2"),
+                               load_denoiser=False)
+
+
+def ratio_threshold(text, base=2.0, allowance=20.0):
+    # Frames per character; a flat ratio punishes short lines (see wsrvoice.voxcpm_backend).
+    return base + allowance / max(len(text or ""), 1)
+
+
+def synth(item, cfg, steps):
+    handle, ref = tempfile.mkstemp(suffix=".wav")
+    os.close(handle)
+    try:
+        with open(ref, "wb") as fh:
+            fh.write(base64.b64decode(item["ref_b64"]))
+        wav = MODEL.generate(
+            text=item["text"], prompt_wav_path=ref, prompt_text=item["ref_text"],
+            reference_wav_path=ref, cfg_value=cfg, inference_timesteps=steps,
+            retry_badcase=True, retry_badcase_max_times=5,
+            retry_badcase_ratio_threshold=ratio_threshold(item["text"]))
+        buf = io.BytesIO()
+        rate = MODEL.tts_model.sample_rate
+        sf.write(buf, wav, rate, format="WAV", subtype="PCM_16")
+        return {"id": item["id"], "wav_b64": base64.b64encode(buf.getvalue()).decode(),
+                "seconds": round(len(wav) / rate, 3)}
+    finally:
+        os.unlink(ref)
+
+
+def handler(job):
+    inp = job["input"]
+    cfg, steps = float(inp.get("cfg", 2.0)), int(inp.get("steps", 30))
+    started, out = time.time(), []
+    for item in inp["items"]:
+        try:
+            out.append(synth(item, cfg, steps))
+        except Exception as exc:  # one bad line must not cost the batch
+            out.append({"id": item.get("id"), "error": f"{type(exc).__name__}: {exc}"})
+    return {"results": out, "elapsed": round(time.time() - started, 2), "device": DEVICE}
+
+
+if __name__ == "__main__":
+    runpod.serverless.start({"handler": handler})

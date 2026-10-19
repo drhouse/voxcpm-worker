@@ -1,0 +1,3 @@
+runpod>=1.7,<2
+voxcpm==2.0.3
+soundfile==0.14.0
