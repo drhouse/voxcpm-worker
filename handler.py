@@ -25,8 +25,16 @@ import torch
 from voxcpm import VoxCPM
 
 DEVICE = "cuda" if torch.cuda.is_available() else "CPU-FALLBACK"
-MODEL = VoxCPM.from_pretrained(os.environ.get("VOXCPM_MODEL", "openbmb/VoxCPM2"),
-                               load_denoiser=False)
+# optimize=False: the default runs torch.compile plus a warm-up at load, which
+# needs a C compiler the slim runtime image lacks - the worker died before
+# taking a job. Compilation changes speed, not output.
+try:
+    MODEL = VoxCPM.from_pretrained(os.environ.get("VOXCPM_MODEL", "openbmb/VoxCPM2"),
+                                   load_denoiser=False, optimize=False)
+    LOAD_ERROR = None
+except Exception as exc:  # report through every job instead of crash-looping silently
+    MODEL, LOAD_ERROR = None, f"model load failed: {type(exc).__name__}: {exc}"
+    print(LOAD_ERROR, flush=True)
 
 
 def ratio_threshold(text, base=2.0, allowance=20.0):
@@ -55,6 +63,8 @@ def synth(item, cfg, steps):
 
 
 def handler(job):
+    if LOAD_ERROR:
+        return {"error": LOAD_ERROR}
     inp = job["input"]
     cfg, steps = float(inp.get("cfg", 2.0)), int(inp.get("steps", 30))
     started, out = time.time(), []
