@@ -14,6 +14,7 @@ Input:  {"input": {"items": [{"id", "text", "ref_b64", "ref_text"}, ...],
 Output: {"results": [{"id", "wav_b64", "seconds"} | {"id", "error"}], "device": ...}
 """
 import base64
+import glob
 import io
 import os
 import tempfile
@@ -28,8 +29,24 @@ DEVICE = "cuda" if torch.cuda.is_available() else "CPU-FALLBACK"
 # optimize=False: the default runs torch.compile plus a warm-up at load, which
 # needs a C compiler the slim runtime image lacks - the worker died before
 # taking a job. Compilation changes speed, not output.
+MODEL_ID = os.environ.get("VOXCPM_MODEL", "openbmb/VoxCPM2")
+
+
+def model_source(model_id):
+    """Runpod's cached copy if the endpoint has one, else the id (baked or downloaded).
+
+    Cached models live at /runpod-volume/huggingface-cache/hub/models--org--name/
+    snapshots/<hash>/ (docs.runpod.io/serverless/endpoints/model-caching).
+    """
+    pattern = "/runpod-volume/huggingface-cache/hub/models--{}/snapshots/*/".format(model_id.replace("/", "--"))
+    hits = sorted(glob.glob(pattern))
+    return hits[-1] if hits else model_id
+
+
+SOURCE = model_source(MODEL_ID)
+print(f"loading {MODEL_ID} from {SOURCE}", flush=True)
 try:
-    MODEL = VoxCPM.from_pretrained(os.environ.get("VOXCPM_MODEL", "openbmb/VoxCPM2"),
+    MODEL = VoxCPM.from_pretrained(SOURCE,
                                    load_denoiser=False, optimize=False)
     LOAD_ERROR = None
 except Exception as exc:  # report through every job instead of crash-looping silently
@@ -73,7 +90,8 @@ def handler(job):
             out.append(synth(item, cfg, steps))
         except Exception as exc:  # one bad line must not cost the batch
             out.append({"id": item.get("id"), "error": f"{type(exc).__name__}: {exc}"})
-    return {"results": out, "elapsed": round(time.time() - started, 2), "device": DEVICE}
+    return {"results": out, "elapsed": round(time.time() - started, 2), "device": DEVICE,
+            "model_source": SOURCE}
 
 
 if __name__ == "__main__":

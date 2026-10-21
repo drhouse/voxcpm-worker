@@ -35,3 +35,11 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/voxcpm-worker:latest
             ghcr.io/${{ github.repository_owner }}/voxcpm-worker:${{ github.sha }}
+      # Slim variant for endpoints using Runpod's cached model (no baked weights).
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.slim
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/voxcpm-worker:slim

@@ -1,0 +1,18 @@
+# Slim variant: no baked weights. The endpoint's cached model (console: Model =
+# openbmb/VoxCPM2) puts them at /runpod-volume/huggingface-cache, so a worker on
+# a cached host starts in seconds and the download is never billed. Without a
+# cached copy the handler falls back to downloading from Hugging Face.
+FROM pytorch/pytorch:2.7.1-cuda12.6-cudnn9-runtime
+
+ENV PYTHONUNBUFFERED=1 HF_HUB_DISABLE_TELEMETRY=1
+
+# A C compiler, so optimize=True (torch.compile) can be switched on later.
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY handler.py .
+CMD ["python", "-u", "handler.py"]
