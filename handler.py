@@ -65,8 +65,11 @@ def synth(item, cfg, steps):
     try:
         with open(ref, "wb") as fh:
             fh.write(base64.b64decode(item["ref_b64"]))
+        # "mode": "ref" = timbre from the clip only, no transcript. Hi-Fi (the
+        # default) ignores parenthesized style instructions; this mode obeys them.
+        prompt = {} if item.get("mode") == "ref" else {"prompt_wav_path": ref, "prompt_text": item["ref_text"]}
         wav = MODEL.generate(
-            text=item["text"], prompt_wav_path=ref, prompt_text=item["ref_text"],
+            text=item["text"], **prompt,
             reference_wav_path=ref, cfg_value=cfg, inference_timesteps=steps,
             retry_badcase=True, retry_badcase_max_times=5,
             retry_badcase_ratio_threshold=ratio_threshold(item["text"]))
