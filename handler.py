@@ -44,10 +44,13 @@ def model_source(model_id):
 
 
 SOURCE = model_source(MODEL_ID)
+# VOXCPM_OPTIMIZE=1 turns on torch.compile (needs the compiler the image now
+# has). Off by default so existing endpoints behave exactly as before.
+OPTIMIZE = os.environ.get("VOXCPM_OPTIMIZE", "0") == "1"
 print(f"loading {MODEL_ID} from {SOURCE}", flush=True)
 try:
     MODEL = VoxCPM.from_pretrained(SOURCE,
-                                   load_denoiser=False, optimize=False)
+                                   load_denoiser=False, optimize=OPTIMIZE)
     LOAD_ERROR = None
 except Exception as exc:  # report through every job instead of crash-looping silently
     MODEL, LOAD_ERROR = None, f"model load failed: {type(exc).__name__}: {exc}"
@@ -59,9 +62,10 @@ def ratio_threshold(text, base=2.0, allowance=20.0):
     return base + allowance / max(len(text or ""), 1)
 
 
-def synth(item, cfg, steps):
+def synth(item, cfg, steps, retries=5):
     handle, ref = tempfile.mkstemp(suffix=".wav")
     os.close(handle)
+    t0 = time.time()
     try:
         with open(ref, "wb") as fh:
             fh.write(base64.b64decode(item["ref_b64"]))
@@ -71,13 +75,13 @@ def synth(item, cfg, steps):
         wav = MODEL.generate(
             text=item["text"], **prompt,
             reference_wav_path=ref, cfg_value=cfg, inference_timesteps=steps,
-            retry_badcase=True, retry_badcase_max_times=5,
+            retry_badcase=retries > 0, retry_badcase_max_times=max(retries, 1),
             retry_badcase_ratio_threshold=ratio_threshold(item["text"]))
         buf = io.BytesIO()
         rate = MODEL.tts_model.sample_rate
         sf.write(buf, wav, rate, format="WAV", subtype="PCM_16")
         return {"id": item["id"], "wav_b64": base64.b64encode(buf.getvalue()).decode(),
-                "seconds": round(len(wav) / rate, 3)}
+                "seconds": round(len(wav) / rate, 3), "gen_s": round(time.time() - t0, 2)}
     finally:
         os.unlink(ref)
 
@@ -87,14 +91,15 @@ def handler(job):
         return {"error": LOAD_ERROR}
     inp = job["input"]
     cfg, steps = float(inp.get("cfg", 2.0)), int(inp.get("steps", 30))
+    retries = int(inp.get("retries", 5))
     started, out = time.time(), []
     for item in inp["items"]:
         try:
-            out.append(synth(item, cfg, steps))
+            out.append(synth(item, cfg, steps, retries))
         except Exception as exc:  # one bad line must not cost the batch
             out.append({"id": item.get("id"), "error": f"{type(exc).__name__}: {exc}"})
     return {"results": out, "elapsed": round(time.time() - started, 2), "device": DEVICE,
-            "model_source": SOURCE}
+            "model_source": SOURCE, "optimize": OPTIMIZE}
 
 
 if __name__ == "__main__":

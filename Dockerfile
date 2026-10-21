@@ -5,6 +5,9 @@ ENV HF_HOME=/models \
     PYTHONUNBUFFERED=1 \
     HF_HUB_DISABLE_TELEMETRY=1
 
+# A C compiler: optimize=True (torch.compile) JIT-builds Triton kernels at load.
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential     && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
