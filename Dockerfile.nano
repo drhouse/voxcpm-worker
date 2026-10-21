@@ -1,0 +1,24 @@
+# VoxCPM2 on Nano-vLLM-VoxCPM: continuous batching for bulk generation.
+# torch 2.7 + Python 3.11, matching the prebuilt flash-attn wheel below (a source
+# build of flash-attn takes over an hour on the CI runner).
+FROM pytorch/pytorch:2.7.1-cuda12.6-cudnn9-runtime
+
+ENV HF_HOME=/models \
+    PYTHONUNBUFFERED=1 \
+    HF_HUB_DISABLE_TELEMETRY=1
+
+# Triton JIT-compiles kernels at load; it needs a C compiler.
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+RUN pip install --no-cache-dir \
+    https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.7cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+RUN pip install --no-cache-dir "nano-vllm-voxcpm==2.0.5" "runpod>=1.7,<2" "soundfile==0.14.0" \
+    "torch==2.7.1" "torchaudio==2.7.1"
+
+RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('openbmb/VoxCPM2')"
+ENV HF_HUB_OFFLINE=1
+
+COPY handler_nano.py .
+CMD ["python", "-u", "handler_nano.py"]

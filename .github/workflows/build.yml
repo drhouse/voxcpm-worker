@@ -3,6 +3,7 @@ name: Build and publish image
 on:
   push:
     branches: [main]
+    paths-ignore: [Dockerfile.nano, handler_nano.py, .github/workflows/nano.yml]
   workflow_dispatch:
 
 permissions:
