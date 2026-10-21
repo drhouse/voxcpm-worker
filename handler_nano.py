@@ -50,6 +50,13 @@ async def server():
                                              gpu_memory_utilization=0.9, devices=[0])
             await _server.wait_for_ready()
             _rate = int((await _server.get_model_info())["output_sample_rate"])
+            # Throwaway warm-up: the first generation also compiles kernels and
+            # captures CUDA graphs. Prime preferred the takes from a warm worker
+            # ("nano-s30") over the first-job takes ("nano-s30-first"), so no
+            # real line is ever generated during warm-up.
+            for _ in range(2):
+                [c async for c in _server.generate(target_text="This line only warms the engine up.",
+                                                   cfg_value=2.0)]
         except Exception as exc:  # report through every job instead of crash-looping
             import traceback
             _load_error = f"engine load failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()[-1500:]}"
@@ -87,7 +94,7 @@ async def handler(job):
 
     out = await asyncio.gather(*(one(i) for i in inp["items"]))
     return {"results": out, "elapsed": round(time.time() - started, 2), "device": "cuda",
-            "engine": "nanovllm", "steps": STEPS}
+            "engine": "nanovllm", "steps": STEPS, "worker": os.environ.get("RUNPOD_POD_ID", "")}
 
 
 if __name__ == "__main__":
